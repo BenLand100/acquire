@@ -1,0 +1,87 @@
+{
+
+name: "RUN", // run settings
+
+outfile: "darknoise_dt_million_2mV.h5", // file to save data to
+
+events: 1000000, // number of events to grab (ch0)
+
+transfer_wait: 100, // time to wait between transfers (ms)
+
+link_num: 1, // the nth digitizer connected to computer
+
+base_address: 0, // hex address offset for VME, 0 otherwise
+
+}
+
+{
+
+name: "DIGITIZER", // digitizer global settings
+
+trigger_holdoff: 20, // samples to freeze baseline and block other triggers after trigger
+
+//choose index [Disabled, TrgOutTrgInDaisyChain, TrgOutSinDaisyChain, SinFanout, GpioGpioDaisyChain]
+sync_mode: 0, // how to synchronize with other devices
+
+//choose index [NIM, TTL]
+io_level: 1, // standard for output logic levels
+
+//choose index [SW_CONTROLLED, S_IN_CONTROLLED]
+acq_mode: 0, // who starts aquisition
+
+//choose index [Oscilloscope, List, Mixed]
+dpp_acq_mode: 2, // what type of data to take
+
+//choose index [EnergyOnly, TimeOnly, EnergyAndTime, ChargeAndTime, None]
+dpp_acq_param: 3, // what DPP parameters to save
+
+//choose index [DISABLED, EXTOUT_ONLY, ACQ_ONLY, ACQ_AND_EXTOUT]
+sw_trig_mode: 0, // behavior of software trigger
+
+//choose index [DISABLED, EXTOUT_ONLY, ACQ_ONLY, ACQ_AND_EXTOUT]
+ext_trig_mode: 0, // behavior of trig_in
+
+//choose index [Normal, Coincidence]
+dpp_trig_mode: 0, // type of DPP triggering to do
+
+aggregates_per_transfer: 10000, // only effect seems to be a crash if not large enough
+
+}
+
+{
+
+name: "CH", // channel specific settings
+
+index: "0", // for channel 0
+
+enabled: true, // record events from this channel?
+self_trig: true, // trigger on over-threshold
+
+//choose index [DISABLED, EXTOUT_ONLY, ACQ_ONLY, ACQ_AND_EXTOUT]
+trig_mode: 3, // behavior of the channel trigger
+
+//choose index [POSITIVE, NEGATIVE]
+pulse_polarity: 1, // expected pulse polarity
+
+//choose  0->40fc/LSB; 1->160fc/LSB; 2->640fc/LSB; 3->2,5pc/LSB 
+charge_sensitivity: 0, // specifies scale factor when integrating charge
+
+//choose index (for 5751) [8, 16, 32, 64, 128, 256, and 512]
+baseline_flag: 3, // specifies number of samples to average for baseline
+
+total_samples: 1000, // total number of to aquire each event
+pretrig_samples: 10, // number of samples before the trigger
+
+offset: 0x8000, // 16-bit (0V to 1V) dac offset for dynamic range (0V to 1V)
+
+threshold: 2, // ADC counts past baseline to trigger
+
+coincidence: 10, // samples to wait for coincidence confirmation
+pregate: 10, // samples before trigger to start integrating
+shortgate: 16, // samples to integrate for qshort
+longgate: 20, // samples to integrate for qlong
+
+events_per_aggregate: 1000, // only effect seems to be a crash if not large enough
+
+}
+

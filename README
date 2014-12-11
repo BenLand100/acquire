@@ -1,0 +1,15 @@
+acquire is a readout program for CAEN Digitizers running pulse shape 
+discrimination firmware (DPP-PSD). acquire reads parameters from JSON formatted
+files containing all settings for programming a DDP-PSD digitizer along with
+readout and data storage properties. The results are stored as raw samples in a 
+structed HDF5 file along with attributes necessary to convert the samples into 
+acquired voltages. Other useful digitizer information is also stored as 
+attributes.
+
+acquire depends on CAEN's Digitizer library and the HDF5 library.
+
+To build, execute the script ./build.sh in the top directory
+
+To use, ./acquire settings.json
+
+Example settings for the DT5751 and V1730 are included.
