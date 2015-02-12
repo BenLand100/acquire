@@ -193,222 +193,236 @@ int main(int argc, char **argv) {
     const int transfer_wait = run["transfer_wait"].cast<int>();
     const int linknum = run["link_num"].cast<int>();
     const int baseaddr = run["base_address"].cast<int>();
-    
-    cout << "Opening digitizer..." << endl;
-
-    int handle; // CAENDigitizerSDK digitizer identifier
-    SAFE(CAEN_DGTZ_OpenDigitizer(CAEN_DGTZ_USB, linknum, 0, baseaddr, &handle));
-    SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
-    SAFE(CAEN_DGTZ_Reset(handle));
-    
-    Settings settings;
-    InitSettings(handle,settings);
-    SettingsFromDB(db,settings);
-    
-    cout << "Programming digitizer..." << endl;
-    
-    ApplySettings(handle,settings);
-    
-    cout << "Allocating readout buffers..." << endl;
-    
-    uint32_t size; 
-    char *readout = NULL; // readout buffer (must init to NULL)
-    uint32_t nevents[MAX_DPP_PSD_CHANNEL_SIZE]; // events read per channel
-    CAEN_DGTZ_DPP_PSD_Event_t *events[MAX_DPP_PSD_CHANNEL_SIZE]; // event buffer per channel
-    CAEN_DGTZ_DPP_PSD_Waveforms_t *waveform = NULL; // waveform buffer
-    
-    // ugh this syntax
-    SAFE(CAEN_DGTZ_MallocReadoutBuffer(handle, &readout, &size));
-    SAFE(CAEN_DGTZ_MallocDPPEvents(handle, (void**)events, &size));
-    SAFE(CAEN_DGTZ_MallocDPPWaveforms(handle, (void**)&waveform, &size)); 
-    
-    cout << "Allocating temporary data storage..." << endl;
-    
-    map<int,int> chan2idx,idx2chan;
-    vector<int> nsamples;
-    vector<uint16_t*> grabs, baselines, qshorts, qlongs;
-    vector<uint32_t*> times;
-    for (size_t i = 0; i < settings.info.Channels; i++) {
-        if (settings.chans[i].enabled) {
-            chan2idx[i] = nsamples.size();
-            idx2chan[nsamples.size()] = i;
-            nsamples.push_back(settings.chans[i].samples);
-            grabs.push_back(new uint16_t[ngrabs*nsamples.back()]);
-            baselines.push_back(new uint16_t[ngrabs]);
-            qshorts.push_back(new uint16_t[ngrabs]);
-            qlongs.push_back(new uint16_t[ngrabs]);
-            times.push_back(new uint32_t[ngrabs]);
-        }
+    int nrepeat;
+    if (run.isMember("repeat_times")) {
+        nrepeat = run["repeat_times"].cast<int>();
+    } else {
+        nrepeat = 0;
     }
-    vector<int> grabbed(chan2idx.size(),0);
-      
-    cout << "Starting acquisition..." << endl;
     
-    SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
-    SAFE(CAEN_DGTZ_ClearData(handle));
-    SAFE(CAEN_DGTZ_SWStartAcquisition(handle));
     
-    bool acquiring = true;
-    while (acquiring) {
+    for (int cycle = 0; cycle < nrepeat; cycle++) {
     
-        cout << "Attempting readout...\n";
+        cout << "Opening digitizer..." << endl;
+
+        int handle; // CAENDigitizerSDK digitizer identifier
+        SAFE(CAEN_DGTZ_OpenDigitizer(CAEN_DGTZ_USB, linknum, 0, baseaddr, &handle));
+        SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
+        SAFE(CAEN_DGTZ_Reset(handle));
         
-        //V1730 segfaults here for unknown reasons
-        SAFE(CAEN_DGTZ_ReadData(handle, CAEN_DGTZ_SLAVE_TERMINATED_READOUT_MBLT, readout, &size)); //read raw data from the digitizer
+        Settings settings;
+        InitSettings(handle,settings);
+        SettingsFromDB(db,settings);
         
-        usleep(transfer_wait*1000);
+        cout << "Programming digitizer..." << endl;
         
-        if (!size) continue;
-        cout << "Transferred " << size << " bytes" << endl;
+        ApplySettings(handle,settings);
         
-        SAFE(CAEN_DGTZ_GetDPPEvents(handle, readout, size, (void **)events, nevents)); //parses the buffer and populates events and nevents
+        cout << "Allocating readout buffers..." << endl;
         
-        acquiring = false;
+        uint32_t size; 
+        char *readout = NULL; // readout buffer (must init to NULL)
+        uint32_t nevents[MAX_DPP_PSD_CHANNEL_SIZE]; // events read per channel
+        CAEN_DGTZ_DPP_PSD_Event_t *events[MAX_DPP_PSD_CHANNEL_SIZE]; // event buffer per channel
+        CAEN_DGTZ_DPP_PSD_Waveforms_t *waveform = NULL; // waveform buffer
         
-        for (uint32_t ch = 0; ch < settings.info.Channels; ch++) {
-            if (!settings.chans[ch].enabled || grabbed[chan2idx[ch]] >= ngrabs) continue; //skip disabled channels
-            
-            acquiring = true;
-            
-            cout << "\t Ch" << ch << ": " << nevents[ch] << " events" << endl;
-            
-            int idx = chan2idx[ch];
-            int &chgrabbed = grabbed[idx];
-            
-            for (uint32_t ev = 0; ev < nevents[ch] && chgrabbed < ngrabs; ev++, chgrabbed++) {
-                SAFE(CAEN_DGTZ_DecodeDPPWaveforms(handle, (void*) &events[ch][ev], (void*) waveform)); //unpacks the data into a nicer CAEN_DGTZ_DPP_PSD_Waveforms_t
-                /* FOR REFERENCE
-                typedef struct 
-                {
-                    uint32_t Format;
-                    uint32_t TimeTag;
-	                int16_t ChargeShort;
-	                int16_t ChargeLong;
-                    int16_t Baseline;
-	                int16_t Pur;
-                    uint32_t *Waveforms; 
-                } CAEN_DGTZ_DPP_PSD_Event_t;
-                typedef struct
-                {
-                    uint32_t Ns;
-                    uint8_t  dualTrace;
-                    uint8_t  anlgProbe;
-                    uint8_t  dgtProbe1;
-                    uint8_t  dgtProbe2;
-                    uint16_t *Trace1;
-                    uint16_t *Trace2;
-                    uint8_t  *DTrace1;
-                    uint8_t  *DTrace2;
-                    uint8_t  *DTrace3;
-                    uint8_t  *DTrace4;
-                } CAEN_DGTZ_DPP_PSD_Waveforms_t;
-                */
-                memcpy(grabs[idx]+nsamples[idx]*chgrabbed,waveform->Trace1,sizeof(uint16_t)*nsamples[idx]);
-                baselines[idx][chgrabbed] = events[ch][ev].Baseline;
-                qshorts[idx][chgrabbed] = events[ch][ev].ChargeShort;
-                qlongs[idx][chgrabbed] = events[ch][ev].ChargeLong;
-                times[idx][chgrabbed] = events[ch][ev].TimeTag;
+        // ugh this syntax
+        SAFE(CAEN_DGTZ_MallocReadoutBuffer(handle, &readout, &size));
+        SAFE(CAEN_DGTZ_MallocDPPEvents(handle, (void**)events, &size));
+        SAFE(CAEN_DGTZ_MallocDPPWaveforms(handle, (void**)&waveform, &size)); 
+        
+        cout << "Allocating temporary data storage..." << endl;
+        
+        map<int,int> chan2idx,idx2chan;
+        vector<int> nsamples;
+        vector<uint16_t*> grabs, baselines, qshorts, qlongs;
+        vector<uint32_t*> times;
+        for (size_t i = 0; i < settings.info.Channels; i++) {
+            if (settings.chans[i].enabled) {
+                chan2idx[i] = nsamples.size();
+                idx2chan[nsamples.size()] = i;
+                nsamples.push_back(settings.chans[i].samples);
+                grabs.push_back(new uint16_t[ngrabs*nsamples.back()]);
+                baselines.push_back(new uint16_t[ngrabs]);
+                qshorts.push_back(new uint16_t[ngrabs]);
+                qlongs.push_back(new uint16_t[ngrabs]);
+                times.push_back(new uint32_t[ngrabs]);
             }
         }
-    }
-    
-    SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
-    SAFE(CAEN_DGTZ_CloseDigitizer(handle));
-    
-    cout << "Saving data to HDF5 file..." << endl;
-    
-    Exception::dontPrint();
-    
-    H5File file(outfile, H5F_ACC_TRUNC);
-    
-    for (size_t i = 0; i < nsamples.size(); i++) {
-        cout << "Dumping channel " << idx2chan[i] << "... ";
-    
-        string groupname = "/ch" + to_string(idx2chan[i]);
-        Group group = file.createGroup(groupname);
         
-        cout << "Attributes, ";
+        cout << "Starting acquisition " << cycle << "..." << endl;
         
-        DataSpace scalar(0,NULL);
+        SAFE(CAEN_DGTZ_ClearData(handle));
+        SAFE(CAEN_DGTZ_SWStartAcquisition(handle));
+        vector<int> grabbed(chan2idx.size(),0);
         
-        Attribute bits = group.createAttribute("bits",PredType::NATIVE_UINT32,scalar);
-        bits.write(PredType::NATIVE_INT32,&settings.info.ADC_NBits);
+        bool acquiring = true;
+        while (acquiring) {
         
-        Attribute ns_sample = group.createAttribute("ns_sample",PredType::NATIVE_DOUBLE,scalar);
-        double val = 0.0;
-        switch (settings.info.FamilyCode) {
-            case 5:
-                val = 1.0;
-                break;
-            case 11:
-                val = 2.0;
-                break;
+            cout << "Attempting readout...\n";
+            
+            //V1730 segfaults here for unknown reasons
+            SAFE(CAEN_DGTZ_ReadData(handle, CAEN_DGTZ_SLAVE_TERMINATED_READOUT_MBLT, readout, &size)); //read raw data from the digitizer
+            
+            usleep(transfer_wait*1000);
+            
+            if (!size) continue;
+            cout << "Transferred " << size << " bytes" << endl;
+            
+            SAFE(CAEN_DGTZ_GetDPPEvents(handle, readout, size, (void **)events, nevents)); //parses the buffer and populates events and nevents
+            
+            acquiring = false;
+            
+            for (uint32_t ch = 0; ch < settings.info.Channels; ch++) {
+                if (!settings.chans[ch].enabled || grabbed[chan2idx[ch]] >= ngrabs) continue; //skip disabled channels
+                
+                acquiring = true;
+                
+                cout << "\t Ch" << ch << ": " << nevents[ch] << " events" << endl;
+                
+                int idx = chan2idx[ch];
+                int &chgrabbed = grabbed[idx];
+                
+                for (uint32_t ev = 0; ev < nevents[ch] && chgrabbed < ngrabs; ev++, chgrabbed++) {
+                    SAFE(CAEN_DGTZ_DecodeDPPWaveforms(handle, (void*) &events[ch][ev], (void*) waveform)); //unpacks the data into a nicer CAEN_DGTZ_DPP_PSD_Waveforms_t
+                    /* FOR REFERENCE
+                    typedef struct 
+                    {
+                        uint32_t Format;
+                        uint32_t TimeTag;
+	                    int16_t ChargeShort;
+	                    int16_t ChargeLong;
+                        int16_t Baseline;
+	                    int16_t Pur;
+                        uint32_t *Waveforms; 
+                    } CAEN_DGTZ_DPP_PSD_Event_t;
+                    typedef struct
+                    {
+                        uint32_t Ns;
+                        uint8_t  dualTrace;
+                        uint8_t  anlgProbe;
+                        uint8_t  dgtProbe1;
+                        uint8_t  dgtProbe2;
+                        uint16_t *Trace1;
+                        uint16_t *Trace2;
+                        uint8_t  *DTrace1;
+                        uint8_t  *DTrace2;
+                        uint8_t  *DTrace3;
+                        uint8_t  *DTrace4;
+                    } CAEN_DGTZ_DPP_PSD_Waveforms_t;
+                    */
+                    memcpy(grabs[idx]+nsamples[idx]*chgrabbed,waveform->Trace1,sizeof(uint16_t)*nsamples[idx]);
+                    baselines[idx][chgrabbed] = events[ch][ev].Baseline;
+                    qshorts[idx][chgrabbed] = events[ch][ev].ChargeShort;
+                    qlongs[idx][chgrabbed] = events[ch][ev].ChargeLong;
+                    times[idx][chgrabbed] = events[ch][ev].TimeTag;
+                }
+            }
         }
-        ns_sample.write(PredType::NATIVE_DOUBLE,&val);
         
-        Attribute offset = group.createAttribute("offset",PredType::NATIVE_UINT32,scalar);
-        offset.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].offset);
+        SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
+        SAFE(CAEN_DGTZ_CloseDigitizer(handle));
         
-        Attribute samples = group.createAttribute("samples",PredType::NATIVE_UINT32,scalar);
-        samples.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].samples);
+        Exception::dontPrint();
         
-        Attribute presamples = group.createAttribute("presamples",PredType::NATIVE_UINT32,scalar);
-        presamples.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].presamples);
+        string fname = outfile;
+        if (nrepeat > 0) {
+            fname += "." + to_string(cycle);
+        }
+        fname += ".h5"; 
         
-        Attribute threshold = group.createAttribute("threshold",PredType::NATIVE_UINT32,scalar);
-        threshold.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].threshold);
+        cout << "Saving data to " << fname << endl;
         
-        Attribute chargesens = group.createAttribute("chargesens",PredType::NATIVE_UINT32,scalar);
-        chargesens.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].chargesens);
+        H5File file(fname, H5F_ACC_TRUNC);
         
-        Attribute baseline = group.createAttribute("baseline",PredType::NATIVE_UINT32,scalar);
-        baseline.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].baseline);
+        for (size_t i = 0; i < nsamples.size(); i++) {
+            cout << "Dumping channel " << idx2chan[i] << "... ";
         
-        Attribute coincidence = group.createAttribute("coincidence",PredType::NATIVE_UINT32,scalar);
-        coincidence.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].coincidence);
-        
-        Attribute shortgate = group.createAttribute("shortgate",PredType::NATIVE_UINT32,scalar);
-        shortgate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].shortgate);
-        
-        Attribute longgate = group.createAttribute("longgate",PredType::NATIVE_UINT32,scalar);
-        longgate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].longgate);
-        
-        Attribute pregate = group.createAttribute("pregate",PredType::NATIVE_UINT32,scalar);
-        pregate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].pregate);
-        
-        hsize_t dimensions[2];
-        dimensions[0] = ngrabs;
-        dimensions[1] = nsamples[i];
-        
-        DataSpace samplespace(2, dimensions);
-        DataSpace metaspace(1, dimensions);
-        
-        cout << "Samples, ";
-        DataSet samples_ds = file.createDataSet(groupname+"/samples", PredType::NATIVE_UINT16, samplespace);
-        samples_ds.write(grabs[i], PredType::NATIVE_UINT16);
-        delete [] grabs[i];
-        
-        cout << "Baselines, ";
-        DataSet baselines_ds = file.createDataSet(groupname+"/baselines", PredType::NATIVE_UINT16, metaspace);
-        baselines_ds.write(baselines[i], PredType::NATIVE_UINT16);
-        delete [] baselines[i];
-        
-        cout << "QShorts, ";
-        DataSet qshorts_ds = file.createDataSet(groupname+"/qshorts", PredType::NATIVE_UINT16, metaspace);
-        qshorts_ds.write(qshorts[i], PredType::NATIVE_UINT16);
-        delete [] qshorts[i];
-        
-        cout << "QLongs, ";
-        DataSet qlongs_ds = file.createDataSet(groupname+"/qlongs", PredType::NATIVE_UINT16, metaspace);
-        qlongs_ds.write(qlongs[i], PredType::NATIVE_UINT16);
-        delete [] qlongs[i];
+            string groupname = "/ch" + to_string(idx2chan[i]);
+            Group group = file.createGroup(groupname);
+            
+            cout << "Attributes, ";
+            
+            DataSpace scalar(0,NULL);
+            
+            Attribute bits = group.createAttribute("bits",PredType::NATIVE_UINT32,scalar);
+            bits.write(PredType::NATIVE_INT32,&settings.info.ADC_NBits);
+            
+            Attribute ns_sample = group.createAttribute("ns_sample",PredType::NATIVE_DOUBLE,scalar);
+            double val = 0.0;
+            switch (settings.info.FamilyCode) {
+                case 5:
+                    val = 1.0;
+                    break;
+                case 11:
+                    val = 2.0;
+                    break;
+            }
+            ns_sample.write(PredType::NATIVE_DOUBLE,&val);
+            
+            Attribute offset = group.createAttribute("offset",PredType::NATIVE_UINT32,scalar);
+            offset.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].offset);
+            
+            Attribute samples = group.createAttribute("samples",PredType::NATIVE_UINT32,scalar);
+            samples.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].samples);
+            
+            Attribute presamples = group.createAttribute("presamples",PredType::NATIVE_UINT32,scalar);
+            presamples.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].presamples);
+            
+            Attribute threshold = group.createAttribute("threshold",PredType::NATIVE_UINT32,scalar);
+            threshold.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].threshold);
+            
+            Attribute chargesens = group.createAttribute("chargesens",PredType::NATIVE_UINT32,scalar);
+            chargesens.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].chargesens);
+            
+            Attribute baseline = group.createAttribute("baseline",PredType::NATIVE_UINT32,scalar);
+            baseline.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].baseline);
+            
+            Attribute coincidence = group.createAttribute("coincidence",PredType::NATIVE_UINT32,scalar);
+            coincidence.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].coincidence);
+            
+            Attribute shortgate = group.createAttribute("shortgate",PredType::NATIVE_UINT32,scalar);
+            shortgate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].shortgate);
+            
+            Attribute longgate = group.createAttribute("longgate",PredType::NATIVE_UINT32,scalar);
+            longgate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].longgate);
+            
+            Attribute pregate = group.createAttribute("pregate",PredType::NATIVE_UINT32,scalar);
+            pregate.write(PredType::NATIVE_UINT32,&settings.chans[idx2chan[i]].pregate);
+            
+            hsize_t dimensions[2];
+            dimensions[0] = ngrabs;
+            dimensions[1] = nsamples[i];
+            
+            DataSpace samplespace(2, dimensions);
+            DataSpace metaspace(1, dimensions);
+            
+            cout << "Samples, ";
+            DataSet samples_ds = file.createDataSet(groupname+"/samples", PredType::NATIVE_UINT16, samplespace);
+            samples_ds.write(grabs[i], PredType::NATIVE_UINT16);
+            delete [] grabs[i];
+            
+            cout << "Baselines, ";
+            DataSet baselines_ds = file.createDataSet(groupname+"/baselines", PredType::NATIVE_UINT16, metaspace);
+            baselines_ds.write(baselines[i], PredType::NATIVE_UINT16);
+            delete [] baselines[i];
+            
+            cout << "QShorts, ";
+            DataSet qshorts_ds = file.createDataSet(groupname+"/qshorts", PredType::NATIVE_UINT16, metaspace);
+            qshorts_ds.write(qshorts[i], PredType::NATIVE_UINT16);
+            delete [] qshorts[i];
+            
+            cout << "QLongs, ";
+            DataSet qlongs_ds = file.createDataSet(groupname+"/qlongs", PredType::NATIVE_UINT16, metaspace);
+            qlongs_ds.write(qlongs[i], PredType::NATIVE_UINT16);
+            delete [] qlongs[i];
 
-        cout << "Times ";
-        DataSet times_ds = file.createDataSet(groupname+"/times", PredType::NATIVE_UINT32, metaspace);
-        times_ds.write(times[i], PredType::NATIVE_UINT32);
-        delete [] times[i];
-        
-        cout << endl;
+            cout << "Times ";
+            DataSet times_ds = file.createDataSet(groupname+"/times", PredType::NATIVE_UINT32, metaspace);
+            times_ds.write(times[i], PredType::NATIVE_UINT32);
+            delete [] times[i];
+            
+            cout << endl;
+        }
     }
-	
 }

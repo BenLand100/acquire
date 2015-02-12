@@ -2,9 +2,11 @@
 
 name: "RUN", // run settings
 
-outfile: "darknoise_vme_million_2mV.h5", // file to save data to
+outfile: "darknoise_vme_million_2mV", // file to save data to
 
 events: 1000000, // number of events to grab (ch0)
+
+repeat_times: 0, // number of times to repeat this run (appends .[number] to outfile)
 
 transfer_wait: 100, // time to wait between transfers (ms)
 
