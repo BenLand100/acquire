@@ -135,7 +135,7 @@ void ApplySettings(int handle, Settings &settings) {
     for (size_t i = 0; i < settings.info.Channels; i++) {
         if (settings.chans[i].enabled) {
             mask |= 1<<i;
-            SAFE(CAEN_DGTZ_SetRecordLength(handle,settings.chans[i].samples,i));
+            if (!(i % 2)) SAFE(CAEN_DGTZ_SetRecordLength(handle,settings.chans[i].samples,i)); //only valid for even channels in V1703 (FIXME more generic?)
             SAFE(CAEN_DGTZ_GetRecordLength(handle,&settings.chans[i].samples,i)); //update to actual value
             SAFE(CAEN_DGTZ_SetDPPPreTriggerSize(handle,i,settings.chans[i].presamples));
             SAFE(CAEN_DGTZ_GetDPPPreTriggerSize(handle,i,&settings.chans[i].presamples)); //update to actual value

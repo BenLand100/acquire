@@ -12,7 +12,7 @@ transfer_wait: 100, // time to wait between transfers (ms)
 
 link_num: 0, // the nth digitizer connected to computer
 
-base_address: 0x22220000, // hex address offset for VME, 0 otherwise
+base_address: 0x11110000, // hex address offset for VME, 0 otherwise
 
 }
 

@@ -29,9 +29,18 @@ using namespace std;
 
 int main(int argc, char **argv) {
 
-    if (argc != 2) {
-        cout << "./trigrate settings.json" << endl;
+    if (argc < 2 || argc > 3) {
+        cout << "./trigrate settings.json [rateoutfile]" << endl;
         return -1;
+    }
+
+    ofstream fout;
+    bool saverates = false;
+    if (argc == 3) {
+        fout.open(argv[2]);
+        saverates = true;
+        cout << "Saving rates to " << argv[2] << endl;
+        fout << "time";
     }
     
     cout << "Parsing settings..." << endl;
@@ -77,12 +86,14 @@ int main(int argc, char **argv) {
     map<int,int> chan2idx,idx2chan;
     for (size_t i = 0; i < settings.info.Channels; i++) {
         if (settings.chans[i].enabled) {
+            if (saverates) fout << "\tch" << i;
             int idx = chan2idx.size();
             chan2idx[i] = idx;
             idx2chan[idx] = i;
         }
     }
     vector<size_t> sumevents(chan2idx.size(),0);
+    if (saverates) fout << endl;
 
     cout << "Starting trigrate..." << endl;
     
@@ -93,7 +104,7 @@ int main(int argc, char **argv) {
     nodelay(stdscr, TRUE);
     
     move(0,0);
-    addstr("Press any key to exit ");
+    addstr("Press q to exit ");
 
     SAFE(CAEN_DGTZ_ClearData(handle));
     SAFE(CAEN_DGTZ_SWStartAcquisition(handle));
@@ -105,7 +116,7 @@ int main(int argc, char **argv) {
     
         int ch;
         if ((ch = getch()) != ERR) {
-            break;
+            if (ch == 'q') break;
         }
 
         SAFE(CAEN_DGTZ_ReadData(handle, CAEN_DGTZ_SLAVE_TERMINATED_READOUT_MBLT, readout, &size)); //read raw data from the digitizer
@@ -117,8 +128,11 @@ int main(int argc, char **argv) {
         SAFE(CAEN_DGTZ_GetDPPEvents(handle, readout, size, (void **)events, nevents)); //parses the buffer and populates events and nevents
         
         gettimeofday(&end, NULL);
-        size_t elapsed = ((end.tv_sec - start.tv_sec)*1000  + (end.tv_usec - start.tv_usec)/1000);
-        if (elapsed >= update_wait) start = end;
+        size_t ms_elapsed = ((end.tv_sec - start.tv_sec)*1000  + (end.tv_usec - start.tv_usec)/1000);
+        if (ms_elapsed >= update_wait) {
+            start = end;
+            if (saverates) fout << end.tv_sec;
+        }
         
         for (uint32_t ch = 0; ch < settings.info.Channels; ch++) {
             if (!settings.chans[ch].enabled) continue; //skip disabled channels
@@ -130,17 +144,22 @@ int main(int argc, char **argv) {
             move(idx*2+2,0);
             addstr(evt.c_str());
             
-            if (elapsed >= update_wait) {
-                string rte = "     " + to_string((double)sumevents[idx]/(double)elapsed*1000.0) + " Hz       ";
+            if (ms_elapsed >= update_wait) {
+                double rate = (double)sumevents[idx]/(double)ms_elapsed*1000.0;
+                if (saverates) fout << '\t' << rate;
+                string rte = "     " + to_string(rate) + " Hz       ";
                 sumevents[idx] = 0;
                 move(idx*2+3,0);
                 addstr(rte.c_str());
             }
         }
+        if (ms_elapsed >= update_wait && saverates) fout << endl;
     }
 
     SAFE(CAEN_DGTZ_SWStopAcquisition(handle));
     SAFE(CAEN_DGTZ_CloseDigitizer(handle));
+    
+    if (saverates) fout.close();
     
     endwin();
 

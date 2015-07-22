@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
     }
     
     
-    for (int cycle = 0; cycle < nrepeat; cycle++) {
+    for (int cycle = nrepeat ? 0 : -1; cycle < nrepeat; cycle++) {
     
         cout << "Opening digitizer..." << endl;
 
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
         uint32_t size; 
         char *readout = NULL; // readout buffer (must init to NULL)
         uint32_t nevents[MAX_DPP_PSD_CHANNEL_SIZE]; // events read per channel
-        CAEN_DGTZ_DPP_PSD_Event_t *events[MAX_DPP_PSD_CHANNEL_SIZE]; // event buffer per channel
+        CAEN_DGTZ_DPP_PSD_Event_t *events[16]; // event buffer per channel
         CAEN_DGTZ_DPP_PSD_Waveforms_t *waveform = NULL; // waveform buffer
         
         // ugh this syntax
