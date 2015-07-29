@@ -12,4 +12,4 @@ To build, execute the script ./build.sh in the top directory
 
 To use, ./acquire settings.json
 
-Example settings for the DT5751 and V1730 are included.
+Example settings for the V1730 using `acquire` and `trigrate`

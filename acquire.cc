@@ -102,7 +102,11 @@ int main(int argc, char **argv) {
             }
         }
         
-        cout << "Starting acquisition " << cycle << "..." << endl;
+        if (cycle >= 0) {
+            cout << "Starting acquisition " << cycle << "..." << endl;
+        } else {
+            cout << "Starting acquisition..." << endl;
+        }
         
         SAFE(CAEN_DGTZ_ClearData(handle));
         SAFE(CAEN_DGTZ_SWStartAcquisition(handle));
@@ -113,7 +117,6 @@ int main(int argc, char **argv) {
         
             cout << "Attempting readout...\n";
             
-            //V1730 segfaults here for unknown reasons
             SAFE(CAEN_DGTZ_ReadData(handle, CAEN_DGTZ_SLAVE_TERMINATED_READOUT_MBLT, readout, &size)); //read raw data from the digitizer
             
             usleep(transfer_wait*1000);

@@ -139,7 +139,7 @@ void ApplySettings(int handle, Settings &settings) {
             SAFE(CAEN_DGTZ_GetRecordLength(handle,&settings.chans[i].samples,i)); //update to actual value
             SAFE(CAEN_DGTZ_SetDPPPreTriggerSize(handle,i,settings.chans[i].presamples));
             SAFE(CAEN_DGTZ_GetDPPPreTriggerSize(handle,i,&settings.chans[i].presamples)); //update to actual value
-            //SAFE(CAEN_DGTZ_SetNumEventsPerAggregate(handle,i,settings.chans[i].eventsperagg));
+            SAFE(CAEN_DGTZ_SetNumEventsPerAggregate(handle,i,settings.chans[i].eventsperagg));
         
             params.thr[i] = settings.chans[i].threshold;
             params.selft[i] = settings.chans[i].selftrig ? 1 : 0;
@@ -153,13 +153,12 @@ void ApplySettings(int handle, Settings &settings) {
             SAFE(CAEN_DGTZ_SetChannelSelfTrigger(handle,settings.chans[i].trigmode,1<<i));
             SAFE(CAEN_DGTZ_SetChannelPulsePolarity(handle,i,settings.chans[i].pulsepol));
             SAFE(CAEN_DGTZ_SetChannelDCOffset(handle,i,settings.chans[i].offset));
-        
-            //SAFE(CAEN_DGTZ_GetDPP_VirtualProbe(handle,i,));
+            
         }
     }
     SAFE(CAEN_DGTZ_SetChannelEnableMask(handle,mask));
     SAFE(CAEN_DGTZ_SetDPPParameters(handle,mask,&params));
     
-    SAFE(CAEN_DGTZ_SetMaxNumAggregatesBLT(handle,settings.aggperblt));
+    SAFE(CAEN_DGTZ_SetDPPEventAggregation(handle, settings.aggperblt, 0));
     
 }
