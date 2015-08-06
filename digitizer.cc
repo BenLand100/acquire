@@ -120,7 +120,7 @@ void ApplySettings(int handle, Settings &settings) {
     
     SAFE(CAEN_DGTZ_SetSWTriggerMode(handle,settings.trig.sw));
     SAFE(CAEN_DGTZ_SetExtTriggerInputMode(handle,settings.trig.ext));
-    //SAFE(CAEN_DGTZ_SetDPPTriggerMode(handle,settings.trig.dpp));
+    SAFE(CAEN_DGTZ_SetDPPTriggerMode(handle,settings.trig.dpp));
     
     SAFE(CAEN_DGTZ_SetDPPAcquisitionMode(handle,settings.dppacqmode,settings.dppacqparam));
     
