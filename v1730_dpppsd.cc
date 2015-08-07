@@ -251,7 +251,7 @@ class V1730Settings {
             card.out_majority_level = digitizer["trig_out_majority_level"].cast<int>(); // 3 bit
             card.external_trg_out = digitizer["external_trigger_out"].cast<bool>() ? 1 : 0; // 1 bit
             card.software_trg_out = digitizer["external_trigger_out"].cast<bool>() ? 1 : 0; // 1 bit
-            card.max_board_agg_blt = digitizer["aggregates_per_transfer"].cast<int>();
+            card.max_board_agg_blt = digitizer["aggregates_per_transfer"].cast<int>(); 
             
             for (int ch = 0; ch < 16; ch++) {
                 string chname = "CH["+to_string(ch)+"]";
@@ -271,7 +271,7 @@ class V1730Settings {
                     chans[ch].baseline_mean = channel["baseline_average"].cast<int>(); // 3 bit (fixed,16,64,256,1024)
                     chans[ch].pulse_polarity = channel["pulse_polarity"].cast<int>(); // 1 bit (0->positive, 1->negative)
                     chans[ch].trg_threshold =  channel["trigger_threshold"].cast<int>();// 12 bit
-                    chans[ch].self_trigger = channel["self_trigger"].cast<bool>() ? 1 : 0; // 1 bit (0->enabled, 1->disabled)
+                    chans[ch].self_trigger = channel["self_trigger"].cast<bool>() ? 0 : 1; // 1 bit (0->enabled, 1->disabled)
                     chans[ch].pre_trigger = channel["pre_trigger"].cast<int>(); // 9* bit
                     chans[ch].gate_offset = channel["gate_offset"].cast<int>(); // 8 bit
                     chans[ch].long_gate = channel["long_gate"].cast<int>(); // 12 bit
@@ -289,7 +289,7 @@ class V1730Settings {
         
         }
         
-        void validate() {
+        void validate() { //FIXME validate bit fields too
             for (int ch = 0; ch < 16; ch++) {
                 if (ch % 2 == 0) {
                     if (chans[ch].record_length > 65535) throw runtime_error("Number of samples exceeds 65535 (ch " + to_string(ch) + ")");
@@ -668,10 +668,14 @@ class EventReadout {
             readout_size = dgtz.readoutBLT(buffer,buffer_size);
             readout_counter++;
             
+            for (int idx = 0; idx < grabbed.size(); idx++) lastgrabbed[idx] = grabbed[idx];
+            
             uint32_t *next = (uint32_t*)buffer, *start = (uint32_t*)buffer;
             while (((next = decode_board_agg(next)) - start + 1)*4 < readout_size) {
                 
             }
+            
+            for (int idx = 0; idx < grabbed.size(); idx++) lastgrabbed[idx] = grabbed[idx] - lastgrabbed[idx];
             
             if (nGrabs) {
                 bool done = true;
@@ -692,7 +696,8 @@ class EventReadout {
         }
         
         void stats() {
-            if (nRepeat > 0) cout << "acquisition cycle: " << cycle+1 << " / " << nRepeat << endl; 
+            if (nRepeat > 0) cout << "acquisition cycle: " << cycle+1 << " / " << nRepeat << '\t';
+            cout << (nGrabs ? (grabbed[0]/nGrabs > 1.0 ? "100" : to_string((int)round(100.0*grabbed[0]/nGrabs)))+"%" : "") << endl; 
             cout << "readout " << readout_counter << " : " << readout_size << " bytes / " << readout_size/1024.0/time_int << " KiB/s" << endl;
             for (size_t i = 0; i < idx2chan.size(); i++) {
                 cout << "\tch" << idx2chan[i] << "\tev: " << lastgrabbed[i] << " / " << lastgrabbed[i]/time_int << " Hz" << endl;
@@ -779,9 +784,6 @@ class EventReadout {
             const uint32_t idx0 = chan2idx.count(group * 2 + 0) ? chan2idx[group * 2 + 0] : 999;
             const uint32_t idx1 = chan2idx.count(group * 2 + 1) ? chan2idx[group * 2 + 1] : 999;
             
-            if (idx0 != 999) lastgrabbed[idx0] = grabbed[idx0];
-            if (idx1 != 999) lastgrabbed[idx1] = grabbed[idx1];
-                
             for (uint32_t *event = chanagg+2; event-chanagg+1 < size; event += samples/2+3) {
                 
                 const bool oddch = event[0] & 0x80000000;
@@ -817,9 +819,6 @@ class EventReadout {
                 }
             
             }
-                
-            if (idx0 != 999) lastgrabbed[idx0] = grabbed[idx0] - lastgrabbed[idx0];
-            if (idx1 != 999) lastgrabbed[idx1] = grabbed[idx1] - lastgrabbed[idx1];
             
             return chanagg + size;
         }
