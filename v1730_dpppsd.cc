@@ -16,6 +16,7 @@
  */
  
 #include <CAENVMElib.h>
+#include <pthread.h>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -26,6 +27,7 @@
 #include <ctime>
 #include <cmath>
 #include <csignal>
+#include <cstring>
 #include <H5Cpp.h>
 #include "json.hh"
 
@@ -522,10 +524,10 @@ class V1730 {
             uint32_t largest_buffer = 0;
             for (int i = 0; i < 8; i++) if (largest_buffer < buffer_sizes[i]) largest_buffer = buffer_sizes[i];
             const uint32_t total_locations = 640000/8; 
-            const uint32_t num_buffers = total_locations/largest_buffer;
+            const uint32_t num_buffers = total_locations%largest_buffer ? total_locations/largest_buffer : total_locations/largest_buffer+1;
             uint32_t shifter = num_buffers;
             for (settings.card.buff_org = 0; shifter != 1; shifter = shifter >> 1, settings.card.buff_org++);
-            if (1 << settings.card.buff_org < num_buffers) settings.card.buff_org++;
+            if (1 << settings.card.buff_org > num_buffers) settings.card.buff_org--;
             if (settings.card.buff_org > 0xA) settings.card.buff_org = 0xA;
             if (settings.card.buff_org < 0x2) settings.card.buff_org = 0x2;
             cout << "Largest buffer: " << largest_buffer << " loc\nDesired buffers: " << num_buffers << "\nProgrammed buffers: " << (1<<settings.card.buff_org) << endl;
@@ -535,7 +537,7 @@ class V1730 {
             write16(REG_READOUT_BLT_AGGREGATE_NUMBER,settings.card.max_board_agg_blt);
             
             //Enable VME BLT readout
-            write16(REG_READOUT_CONTROL,1<<4);
+            write16(REG_READOUT_CONTROL,(berr ? 1 : 0)<<4);
             
             return true;
         }
@@ -633,22 +635,90 @@ class V1730 {
         
 };
 
-class EventReadout {
+class Buffer {
+    public:
+        Buffer(size_t _size) : size(_size) {
+            buffer = new char[size*2];
+            r_ptr = w_ptr = buffer;
+            pthread_mutex_init(&mutex,NULL);
+            pthread_cond_init(&cond, NULL);
+        }
+        virtual ~Buffer() {
+            delete [] buffer;
+            pthread_mutex_destroy(&mutex);
+            pthread_cond_destroy(&cond);
+        }
+        inline double pct() {
+            return 100.0*fill()/size;
+        }
+        inline size_t free() {
+            pthread_mutex_lock(&mutex);
+            const size_t amt = size - (w_ptr - r_ptr);
+            pthread_mutex_unlock(&mutex);
+            return amt;
+        }
+        inline size_t fill() {
+            pthread_mutex_lock(&mutex);
+            const size_t amt = w_ptr - r_ptr;
+            pthread_mutex_unlock(&mutex);
+            return amt;
+        }
+        inline void inc(size_t amt) {
+            pthread_mutex_lock(&mutex);
+            w_ptr += amt;
+            if (r_ptr - buffer >= size) {
+                const size_t total = w_ptr - r_ptr;
+                memcpy(buffer,r_ptr,total);
+                r_ptr = buffer;
+                w_ptr = buffer + total;
+            }
+            pthread_mutex_unlock(&mutex);
+            pthread_cond_signal(&cond);
+        }
+        inline void dec(size_t amt) {
+            pthread_mutex_lock(&mutex);
+            r_ptr += amt;
+            pthread_mutex_unlock(&mutex);
+        }
+        inline char* wptr() {
+            pthread_mutex_lock(&mutex);
+            char *ptr = w_ptr;
+            pthread_mutex_unlock(&mutex);
+            return ptr;
+        }
+        inline char* rptr() {
+            pthread_mutex_lock(&mutex);
+            char *ptr = r_ptr;
+            pthread_mutex_unlock(&mutex);
+            return ptr;
+        }
+        inline void ready() {
+            pthread_mutex_lock(&mutex);
+            while (w_ptr - r_ptr == 0) pthread_cond_wait(&cond,&mutex);
+            pthread_mutex_unlock(&mutex);
+        }
+    protected:
+        pthread_mutex_t mutex;
+        pthread_cond_t cond;
+        char *buffer, *r_ptr, *w_ptr;
+        size_t size;
+};
+
+class EventDecoder {
 
     public:
     
         // for data acquisition
-        EventReadout(size_t nGrabs, size_t nRepeat, string outfile, V1730Settings &_settings) : settings(_settings) {
+        EventDecoder(size_t nGrabs, size_t nRepeat, string outfile, V1730Settings &_settings) : settings(_settings) {
             init(nGrabs,nRepeat,outfile);
         }
         
         // for debugging / trigger rate
-        EventReadout(V1730Settings &_settings) : settings(_settings) {
+        EventDecoder(V1730Settings &_settings) : settings(_settings) {
             init(0,0,"none");
         }
         
-        virtual ~EventReadout() {
-            delete [] buffer;
+        virtual ~EventDecoder() {
             for (size_t i = 0; i < grabs.size(); i++) {
                 delete [] grabs[i];
                 delete [] baselines[i];
@@ -658,24 +728,30 @@ class EventReadout {
             }
         }
         
-        bool readout(V1730 &dgtz) {
-        
+        bool decode(Buffer &buf) {
             struct timespec this_time;
             clock_gettime(CLOCK_MONOTONIC,&this_time);
             time_int = (this_time.tv_sec-last_time.tv_sec)+(this_time.tv_nsec-last_time.tv_nsec)*1e-9;
             last_time = this_time;
-        
-            readout_size = dgtz.readoutBLT(buffer,buffer_size);
-            readout_counter++;
             
             for (int idx = 0; idx < grabbed.size(); idx++) lastgrabbed[idx] = grabbed[idx];
             
-            uint32_t *next = (uint32_t*)buffer, *start = (uint32_t*)buffer;
-            while (((next = decode_board_agg(next)) - start + 1)*4 < readout_size) {
+            decode_size = buf.fill();
+            cout << "buffer fill: " << buf.fill() << " bytes / " << buf.pct() << "%" << endl;
+            uint32_t *next = (uint32_t*)buf.rptr(), *start = (uint32_t*)buf.rptr();
+            while (((next = decode_board_agg(next)) - start + 1)*4 < decode_size) {
                 
             }
+            buf.dec(decode_size);
             
             for (int idx = 0; idx < grabbed.size(); idx++) lastgrabbed[idx] = grabbed[idx] - lastgrabbed[idx];
+            
+            if (nRepeat > 0) cout << "acquisition cycle: " << cycle+1 << " / " << nRepeat << '\t';
+            cout << (nGrabs ? (grabbed[0]/nGrabs > 1.0 ? "100" : to_string((int)round(100.0*grabbed[0]/nGrabs)))+"%" : "") << endl; 
+            cout << "decode " << decode_counter << " : " << decode_size << " bytes / " << decode_size/1024.0/time_int << " KiB/s" << endl;
+            for (size_t i = 0; i < idx2chan.size(); i++) {
+                cout << "\tch" << idx2chan[i] << "\tev: " << lastgrabbed[i] << " / " << lastgrabbed[i]/time_int << " Hz" << endl;
+            }
             
             if (nGrabs) {
                 bool done = true;
@@ -692,16 +768,9 @@ class EventReadout {
                 }
             }
             
+            decode_counter++;
+            
             return true;
-        }
-        
-        void stats() {
-            if (nRepeat > 0) cout << "acquisition cycle: " << cycle+1 << " / " << nRepeat << '\t';
-            cout << (nGrabs ? (grabbed[0]/nGrabs > 1.0 ? "100" : to_string((int)round(100.0*grabbed[0]/nGrabs)))+"%" : "") << endl; 
-            cout << "readout " << readout_counter << " : " << readout_size << " bytes / " << readout_size/1024.0/time_int << " KiB/s" << endl;
-            for (size_t i = 0; i < idx2chan.size(); i++) {
-                cout << "\tch" << idx2chan[i] << "\tev: " << lastgrabbed[i] << " / " << lastgrabbed[i]/time_int << " Hz" << endl;
-            }
         }
 
     protected: 
@@ -712,12 +781,11 @@ class EventReadout {
         double time_int;
         
         size_t cycle;    
-        size_t readout_counter;
+        size_t decode_counter;
         size_t chanagg_counter;
         size_t boardagg_counter;
         
-        size_t buffer_size, readout_size;
-        char *buffer;
+        size_t decode_size;
             
         size_t nGrabs, nRepeat;
         string outfile;    
@@ -735,9 +803,7 @@ class EventReadout {
             
             clock_gettime(CLOCK_MONOTONIC,&last_time);
             
-            cycle = readout_counter = chanagg_counter = boardagg_counter = 0;
-            buffer_size = 100*1024*1024;
-            buffer = new char[buffer_size];
+            cycle = decode_counter = chanagg_counter = boardagg_counter = 0;
             
             for (size_t ch = 0; ch < 16; ch++) {
                 if (settings.getEnabled(ch)) {
@@ -826,7 +892,6 @@ class EventReadout {
         uint32_t* decode_board_agg(uint32_t *boardagg) {
             if (boardagg[0] == 0xFFFFFFFF) {
                 boardagg++; //sometimes padded
-                cout << "padded\n";
             }
             if ((boardagg[0] & 0xF0000000) != 0xA0000000) 
                 throw runtime_error("Board aggregate missing tag");
@@ -967,6 +1032,27 @@ void int_handler(int x) {
     running = false;
 }
 
+typedef struct {
+    EventDecoder *acq;
+    Buffer *buff;
+} decode_thread_data;
+
+void *decode_thread(void *data) {
+    signal(SIGINT,int_handler);
+    EventDecoder *acq = ((decode_thread_data*)data)->acq;
+    Buffer *buff = ((decode_thread_data*)data)->buff;
+    try {
+        while (running) {
+            buff->ready();
+            if (running && !acq->decode(*buff)) running = false;
+        }
+    } catch (runtime_error &e) {
+        running = false;
+        cout << "Decode thread aborted: " << e.what() << endl;
+    }
+    pthread_exit(NULL);
+}
+
 int main(int argc, char **argv) {
 
     if (argc != 2) {
@@ -976,7 +1062,7 @@ int main(int argc, char **argv) {
 
     running = true;
     signal(SIGINT,int_handler);
-    
+
     cout << "Reading configuration..." << endl;
     
     map<string,json::Value> db = readDB(argv[1]);
@@ -997,7 +1083,7 @@ int main(int argc, char **argv) {
     cout << "Opening VME link..." << endl;
     
     VMEBridge bridge(linknum,0);
-    V1730 dgtz(bridge,baseaddr);
+    V1730 dgtz(bridge,baseaddr,false);
    
     cout << "Programming Digitizer..." << endl;
     
@@ -1007,23 +1093,34 @@ int main(int argc, char **argv) {
     
     cout << "Starting acquisition..." << endl;
     
-    EventReadout acq(ngrabs,nrepeat,outfile,settings);
+    Buffer buff(100*1024*1024);
+    EventDecoder acq(ngrabs,nrepeat,outfile,settings);
     vector<uint32_t> temps;
     dgtz.startAcquisition();
     
-    for (size_t counter = 0; running; counter++) {
+    decode_thread_data data;
+    data.acq = &acq;
+    data.buff = &buff;
+    pthread_t decode;
+    pthread_create(&decode,NULL,&decode_thread,&data);
     
+    for (size_t counter = 0; running; counter++) {
+        
         while (!dgtz.readoutReady() && running) {
             if (!dgtz.acquisitionRunning()) break;
         }
+        
         if (!dgtz.acquisitionRunning()) {
             cout << "Digitizer aborted acquisition!" << endl;
-            break;
+            running = false;
         }
         
-        if (!acq.readout(dgtz)) running = false;
-        acq.stats();
+        if (!running) break;
+
+        buff.inc(dgtz.readoutBLT(buff.wptr(),buff.free()));
         
+        //cout << buff.pct() << endl;
+
         if (checktemps && counter % 100 == 0) {
             bool overtemp = dgtz.checkTemps(temps,60);
             cout << "temps: [ " << temps[0];
@@ -1037,10 +1134,13 @@ int main(int argc, char **argv) {
         
     }
     
+    buff.inc(0);
+     
     cout << "Stopping acquisition..." << endl;
     
     dgtz.stopAcquisition();
-    
-    return 0;
+
+    pthread_cancel(decode);
+    pthread_exit(NULL);
 
 }
