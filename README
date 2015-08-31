@@ -13,8 +13,3 @@ To build, execute the script ./build.sh in the top directory
 To use, ./acquire settings.json
 
 Example settings for the V1730 using `acquire` and `trigrate`
-
-v1730_dpppsd is a low level control program specifically for the V1730
-digitizer running DPP-PSD firmware communicating over a V1718 VME to USB bridge 
-that depends only on CAENVMELib and HDF5 libraries. It is quite similar to 
-acquire in functionality, but has access to V1730 specific functionality.
